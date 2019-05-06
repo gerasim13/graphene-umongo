@@ -1,3 +1,4 @@
+import umongo
 from graphql.pyutils.cached_property import cached_property
 from umongo.frameworks.tools import cook_find_filter
 from umongo.template import Template
@@ -5,7 +6,40 @@ from umongo.template import Template
 from .utils import iter_umongo_fields
 
 
-class UMongoBaseQueryset:
+def init_queryset(queryset_cls, model, schema_cls):
+    def _find_collection(m):
+        try:
+            if hasattr(m, 'collection'):
+                return m.collection
+        except umongo.exceptions.NoDBDefinedError:
+            pass
+
+        if hasattr(m, 'opts'):
+            if hasattr(m.opts, 'collection_name'):
+                return m.opts.collection_name
+            if hasattr(m.opts, 'offspring') and len(m.opts.offspring):
+                return _find_collection(next(iter(m.opts.offspring)))
+
+        if hasattr(m, 'Meta'):
+            if hasattr(m.Meta, 'collection_name'):
+                return m.Meta.collection_name
+            if hasattr(m.Meta, 'offspring') and len(m.Meta.offspring):
+                return _find_collection(next(iter(m.Meta.offspring)))
+
+        return model.__name__.lower()
+
+    def _find_container_field(m, collection):
+        return None
+
+    collection = _find_collection(model)
+    container = _find_container_field(model, collection)
+    assert collection, model
+
+    return queryset_cls(model, collection, container,
+                        schema_cls.postprocess_db_response)
+
+
+class BaseQueryset:
     model = None
     collection_name = None
     embedded_documents_field = None
@@ -13,17 +47,19 @@ class UMongoBaseQueryset:
 
     def __init__(self, model,
                  collection_name=None,
-                 embedded_documents_field=None,
-                 documents_converter=None):
+                 embedded_docs_field=None,
+                 doc_converter=None):
         super().__init__()
         self.model = model
-        self.embedded_documents_field = embedded_documents_field
-        self.documents_converter = documents_converter or self.model.build_from_mongo
+        self.embedded_documents_field = embedded_docs_field
+        self.documents_converter = doc_converter
 
         if collection_name:
             self.collection_name = collection_name
-        elif hasattr(model.opts, 'collection_name'):
+        elif hasattr(model, 'opts') and hasattr(model.opts, 'collection_name'):
             self.collection_name = model.opts.collection_name
+        elif hasattr(model, 'Meta') and hasattr(model.Meta, 'collection_name'):
+            self.collection_name = model.Meta.collection_name
 
         assert isinstance(self.collection_name, str), self.collection_name
         assert callable(self.documents_converter) or self.documents_converter is None
@@ -55,7 +91,7 @@ class UMongoBaseQueryset:
 
     @cached_property
     def base_projection(self):
-        return {}
+        return NotImplementedError
 
     @cached_property
     def collection(self):
@@ -64,11 +100,15 @@ class UMongoBaseQueryset:
     async def find(self, match, projection, limit, skip):
         raise NotImplementedError
 
-    async def find_one(self, match, projection, limit, skip):
+    async def find_one(self, match, projection):
         raise NotImplementedError
 
 
-class UMongoFindQueryset(UMongoBaseQueryset):
+class FindQueryset(BaseQueryset):
+    @cached_property
+    def base_projection(self):
+        return {i: True for i in self.get_field_names()}
+
     async def find(self, match, projections, limit=0, skip=0):
         _projections = self.base_projection
         if projections:
@@ -79,20 +119,27 @@ class UMongoFindQueryset(UMongoBaseQueryset):
             projection=_projections,
             limit=limit,
             skip=skip)
-        return [self.documents_converter(document)
-                async for document in cursor]
+
+        if self.documents_converter:
+            return [self.documents_converter(document)
+                    async for document in cursor]
+        return [document async for document in cursor]
 
     async def find_one(self, match, projections):
         _projections = self.base_projection
         if projections:
             _projections.update(projections)
 
-        return self.documents_converter(await self.collection.find_one(
+        _result = await self.collection.find_one(
             filter=match,
-            projection=_projections))
+            projection=_projections)
+
+        if self.documents_converter:
+            return self.documents_converter(_result)
+        return _result
 
 
-class UMongoAggregationQueryset(UMongoBaseQueryset):
+class AggregationQueryset(BaseQueryset):
     @classmethod
     def _get_match(cls, kwargs, list_field=None):
         match = dict()
@@ -154,7 +201,10 @@ class UMongoAggregationQueryset(UMongoBaseQueryset):
             limit,
             skip
         ))
-        return [self.documents_converter(doc) async for doc in cursor]
+
+        if self.documents_converter:
+            return [self.documents_converter(doc) async for doc in cursor]
+        return [doc async for doc in cursor]
 
     async def find_one(self, match, projections):
         return next(iter(await self.find(match, projections)), None)

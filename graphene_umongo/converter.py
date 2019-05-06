@@ -1,14 +1,27 @@
 import functools
-import umongo
+from collections import OrderedDict
+
 import graphene
+import umongo
+from graphene.types.utils import yank_fields_from_attrs
+
+from .utils import iter_umongo_fields
+
+
+def construct_fields(model, registry, only_fields=None, exclude_fields=None):
+    fields = OrderedDict()
+    for name, field in iter_umongo_fields(model):
+        fields[name] = convert_umongo_field(field, registry)
+    return fields
 
 
 def get_column_doc(column):
-    return getattr(column, "doc", None)
+    return column.metadata.get("doc", None)
 
 
 def is_column_nullable(column):
-    return bool(getattr(column, "nullable", True))
+    return not bool(getattr(column, "required", True)) \
+           and bool(getattr(column, "allow_none", True))
 
 
 def convert_umongo_field(f, registry=None):
@@ -16,7 +29,23 @@ def convert_umongo_field(f, registry=None):
 
 
 def convert_umongo_model(m, registry=None):
-    return registry.get_type_for_model(m)
+    _schema_cls = registry.get_embedded_model_type(m)
+    if not _schema_cls:
+        _fields = yank_fields_from_attrs(
+            construct_fields(m, registry),
+            _as=graphene.Field
+        )
+        _fields['Meta'] = type('Meta', (), {
+            'default_resolver': graphene.types.resolver.dict_resolver
+        })
+        _schema_cls = type(m.__name__, (graphene.ObjectType,), _fields)
+        registry.register_embedded_model(m, _schema_cls)
+    return _schema_cls
+
+
+def convert_id_field(f, registry=None):
+    return graphene.ID(description=get_column_doc(f),
+                       required=not (is_column_nullable(f)))
 
 
 @functools.singledispatch
@@ -25,20 +54,17 @@ def convert_umongo_type(f, registry=None):
                     f"({f.__class__})")
 
 
-@convert_umongo_type.register(umongo.fields.ObjectIdField)
-@convert_umongo_type.register(umongo.fields.ReferenceField)
-@convert_umongo_type.register(umongo.fields.GenericReferenceField)
-def convert_id_field(f, registry=None):
-    return graphene.ID(description=get_column_doc(f),
-                       required=not (is_column_nullable(f)))
-
-
 @convert_umongo_type.register(umongo.fields.UUIDField)
 def convert_uuid_field(f, registry=None):
+    if f.attribute == '_id':
+        return convert_id_field(f, registry)
     return graphene.UUID(description=get_column_doc(f),
                          required=not (is_column_nullable(f)))
 
 
+@convert_umongo_type.register(umongo.fields.ObjectIdField)
+@convert_umongo_type.register(umongo.fields.ReferenceField)
+@convert_umongo_type.register(umongo.fields.GenericReferenceField)
 @convert_umongo_type.register(umongo.fields.StringField)
 @convert_umongo_type.register(umongo.fields.StrField)
 @convert_umongo_type.register(umongo.fields.FormattedStringField)
@@ -47,6 +73,8 @@ def convert_uuid_field(f, registry=None):
 @convert_umongo_type.register(umongo.fields.EmailField)
 @convert_umongo_type.register(umongo.fields.ConstantField)
 def convert_str_field(f, registry=None):
+    if f.attribute == '_id':
+        return convert_id_field(f, registry)
     return graphene.String(description=get_column_doc(f),
                            required=not (is_column_nullable(f)))
 
@@ -94,7 +122,10 @@ def convert_dict_field(f, registry=None):
 
 @convert_umongo_type.register(umongo.fields.EmbeddedField)
 def convert_embedded_doc_field(f, registry=None):
-    _type = convert_umongo_model(f.embedded_document, registry)
+    if issubclass(type(f.embedded_document), umongo.template.MetaTemplate):
+        _type = convert_umongo_model(f.embedded_document, registry)
+    else:
+        _type = type(convert_umongo_type(f.embedded_document, registry))
     return graphene.Field(_type,
                           description=get_column_doc(f),
                           required=not (is_column_nullable(f)))
@@ -102,7 +133,10 @@ def convert_embedded_doc_field(f, registry=None):
 
 @convert_umongo_type.register(umongo.fields.ListField)
 def convert_list_field(f, registry=None):
-    _type = convert_umongo_model(f.container.embedded_document, registry)
+    if issubclass(type(f.container), umongo.template.MetaTemplate):
+        _type = convert_umongo_model(f.container, registry)
+    else:
+        _type = type(convert_umongo_type(f.container, registry))
     return graphene.List(_type,
                          description=get_column_doc(f),
                          required=not (is_column_nullable(f)))
