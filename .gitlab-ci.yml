@@ -1,0 +1,8 @@
+stages:
+  - pip
+pip:
+  stage: pip
+  script:
+    - python setup.py -vvv sdist upload -r pyshop
+  tags:
+    - python
