@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 import graphene
 import umongo
 from graphene.types.utils import yank_fields_from_attrs
@@ -15,7 +17,7 @@ class ObjectTypeOptions(graphene.types.objecttype.ObjectTypeOptions):
     id = None
 
 
-class ObjectType(graphene.types.objecttype.ObjectType):
+class ObjectType(graphene.ObjectType):
     @classmethod
     def __init_subclass_with_meta__(
         cls,
@@ -56,7 +58,7 @@ class ObjectType(graphene.types.objecttype.ObjectType):
             construct_fields(model.opts.template,
                              registry,
                              only_fields,
-                            exclude_fields),
+                             exclude_fields),
             _as=graphene.Field
         )
 
@@ -121,24 +123,44 @@ class ObjectType(graphene.types.objecttype.ObjectType):
         if not document:
             return None
         model = cls._meta.model
+        model_template = model.opts.template.__dict__
+
+        def _iter_fields(model_cls):
+            template = model_cls.opts.template
+            for i in dir(template):
+                f = getattr(template, i)
+                if not isinstance(f, umongo.fields.BaseField):
+                    continue
+                yield i, f
+
+        def _to_mongo_world(field_name):
+            field = model_template.get(field_name)
+            if field:
+                return field.attribute or \
+                       getattr(field, 'marshmallow_attribute')
+            return field_name
+
+        @lru_cache(maxsize=None)
+        def _mongo_world_fields(model_cls):
+            return {f.attribute or i: i
+                    for i, f in _iter_fields(model_cls)}
+
+        @lru_cache(maxsize=None)
+        def _python_world_fields(model_cls):
+            return {i: f.attribute or i
+                    for i, f in _iter_fields(model_cls)}
+
+        def _to_mongo_world(model_cls, field_name):
+            _fields = _python_world_fields(model_cls)
+            _fields.update({'id': '_id'})
+            return _fields.get(field_name, field_name)
+
+        def _from_mongo_world(model_cls, field_name):
+            _fields = _mongo_world_fields(model_cls)
+            _fields.update({'_id': 'id'})
+            return _fields.get(field_name, field_name)
+
         return cls(**{
-            model._from_mongo_world(k): v for k,v in document.items()
+            _from_mongo_world(model, k): v
+            for k, v in document.items()
         })
-
-        # model_template = model.opts.template.__dict__
-        #
-        # def _to_mongo_world(field_name):
-        #     field = model_template.get(field_name)
-        #     if field:
-        #         return field.attribute or \
-        #                getattr(field, 'marshmallow_attribute')
-        #     return field_name
-        #
-        #
-        # if '_id' in document:
-        #     document['id'] = document['_id']
-        #     del document['_id']
-        # return cls(**document)
-
-    # async def resolve_id(self, info):
-    #     return self.id

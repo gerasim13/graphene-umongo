@@ -1,5 +1,6 @@
 import functools
 from collections import OrderedDict
+import importlib
 
 import graphene
 import umongo
@@ -51,7 +52,8 @@ def convert_id_field(f, registry=None):
 @functools.singledispatch
 def convert_umongo_type(f, registry=None):
     raise Exception(f"Don't know how to convert the uMongo type {f} "
-                    f"({f.__class__})")
+                    f"({f.__class__}), "
+                    f"convert_umongo_type: {convert_umongo_type.__dict__}")
 
 
 @convert_umongo_type.register(umongo.fields.UUIDField)
@@ -122,13 +124,31 @@ def convert_dict_field(f, registry=None):
 
 @convert_umongo_type.register(umongo.fields.EmbeddedField)
 def convert_embedded_doc_field(f, registry=None):
-    if issubclass(type(f.embedded_document), umongo.template.MetaTemplate):
-        _type = convert_umongo_model(f.embedded_document, registry)
+    model = f.embedded_document
+
+    if getattr(model.Meta, 'abstract', False):
+        module = importlib.import_module(model.__module__)
+        model = getattr(module, model.__name__, model)
+
+        _type = registry.get_union(model)
+        if not _type:
+            types = [
+                convert_umongo_model(o, registry)
+                for o in model.opts.offspring
+            ]
+            _type = type(
+                model.__name__,
+                (graphene.Union,),
+                {'Meta': {'types': types}})
+            registry.register_union(model, _type)
+    elif issubclass(type(model), umongo.template.MetaTemplate):
+        _type = convert_umongo_model(model, registry)
     else:
-        _type = type(convert_umongo_type(f.embedded_document, registry))
-    return graphene.Field(_type,
-                          description=get_column_doc(f),
-                          required=not (is_column_nullable(f)))
+        _type = convert_umongo_type(model, registry)
+    return graphene.Field(
+        _type,
+        description=get_column_doc(f),
+        required=not (is_column_nullable(f)))
 
 
 @convert_umongo_type.register(umongo.fields.ListField)

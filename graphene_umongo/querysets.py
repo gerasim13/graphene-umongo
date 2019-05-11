@@ -35,7 +35,9 @@ def init_queryset(queryset_cls, model, schema_cls):
     container = _find_container_field(model, collection)
     assert collection, model
 
-    return queryset_cls(model, collection, container,
+    return queryset_cls(model,
+                        getattr(collection, 'name', collection),
+                        container,
                         schema_cls.postprocess_db_response)
 
 

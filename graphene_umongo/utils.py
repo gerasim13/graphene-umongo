@@ -2,8 +2,6 @@ from umongo.abstract import BaseField
 
 
 async def get_query(model, query_fn, info):
-    #
-
     # query = getattr(model, "query", None)
     # if not query:
     #     session = get_session(context)
@@ -33,7 +31,6 @@ async def get_query(model, query_fn, info):
     _args = {k: v for k, v in _iter_args(info)}
     _match = _build_match(_args)
     _projection = _build_projection(_args)
-    print(_match)
     return await query_fn(_match, _projection)
 
 

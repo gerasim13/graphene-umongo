@@ -4,6 +4,7 @@ class Registry(object):
         self._registry_embeds = {}
         self._registry_querysets = {}
         self._registry_composites = {}
+        self._registry_unions = {}
 
     def register(self, cls):
         from .types import ObjectType
@@ -33,6 +34,12 @@ class Registry(object):
 
     def get_converter_for_composite(self, composite):
         return self._registry_composites.get(composite)
+
+    def register_union(self, model, union):
+        self._registry_unions[model] = union
+
+    def get_union(self, model):
+        return self._registry_unions.get(model)
 
 
 registry = None
