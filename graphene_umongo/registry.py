@@ -3,7 +3,7 @@ class Registry(object):
         self._registry_models = {}
         self._registry_embeds = {}
         self._registry_querysets = {}
-        self._registry_composites = {}
+        self._registry_attributes = {}
         self._registry_unions = {}
 
     def register(self, cls):
@@ -17,11 +17,11 @@ class Registry(object):
     def get_type_for_model(self, model):
         return self._registry_models.get(model)
 
-    def register_embedded_model(self, model, cls):
-        self._registry_embeds[model] = cls
+    def register_embedded_model(self, type_name, cls):
+        self._registry_embeds[type_name] = cls
 
-    def get_embedded_model_type(self, model):
-        return self._registry_embeds.get(model)
+    def get_embedded_model_type(self, type_name):
+        return self._registry_embeds.get(type_name)
 
     def register_queryset(self, model, queryset):
         self._registry_querysets[model] = queryset
@@ -29,17 +29,17 @@ class Registry(object):
     def get_queryset(self, model):
         return self._registry_querysets.get(model)
 
-    def register_composite_converter(self, composite, converter):
-        self._registry_composites[composite] = converter
+    def register_attributes(self, attributes_cls):
+        self._registry_attributes[attributes_cls.__name__] = attributes_cls
 
-    def get_converter_for_composite(self, composite):
-        return self._registry_composites.get(composite)
+    def get_attributes_for_model(self, attributes):
+        return self._registry_attributes.get(attributes)
 
-    def register_union(self, model, union):
-        self._registry_unions[model] = union
+    def register_union(self, class_name, union):
+        self._registry_unions[class_name] = union
 
-    def get_union(self, model):
-        return self._registry_unions.get(model)
+    def get_union(self, class_name):
+        return self._registry_unions.get(class_name)
 
 
 registry = None

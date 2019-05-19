@@ -1,7 +1,7 @@
 import graphene
 from graphql_relay.node.node import from_global_id
 
-from .converter import (convert_model_to_attributes)
+from .converter import convert_model_to_attributes
 
 
 class InputObjectTypeOptions(graphene.types.inputobjecttype.InputObjectTypeOptions):
@@ -14,18 +14,25 @@ class InputObjectType(graphene.InputObjectType):
     @classmethod
     def __init_subclass_with_meta__(cls, container=None, _meta=None, **options):
         def _iter_fields(attributes):
+            def __(i, f):
+                if not isinstance(f, graphene.Field):
+                    return
+                yield i, f
+
             for i in vars(attributes):
                 f = getattr(attributes, i)
-                if not isinstance(f, graphene.Field):
-                    continue
-                yield i, f
+
+                if not isinstance(f, list):
+                    yield from __(i, f)
+                else:
+                    for _f in f:
+                        yield from __(i, _f)
 
         def _embedded_input_type(field):
             if isinstance(field.type, graphene.List):
                 data_type = field.type.of_type
             else:
                 data_type = field.type.__class__
-
             if issubclass(data_type, graphene.InputObjectType):
                 return data_type
             return None
@@ -39,11 +46,8 @@ class InputObjectType(graphene.InputObjectType):
         model = None
         if schema:
             model = schema._meta.model
-            connection_factory = schema._meta.connection_field_factory
-
             attributes = convert_model_to_attributes(
                 model,
-                connection_field_factory=connection_factory,
                 input_attributes=True)
 
             for name, field in _iter_fields(attributes):
